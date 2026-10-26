@@ -1,8 +1,58 @@
-from flask import Flask, request, render_template_string,redirect
-from s3_service import upload_file,get_storage_info,download_file,delete_file
+import os
+import hashlib
+from flask import Flask, request, render_template_string,redirect,url_for,session
+from urllib.parse import urlencode
+from authlib.integrations.flask_client import OAuth
+from dotenv import load_dotenv
+from s3_service import (
+    upload_file,
+    get_storage_info,
+    download_file,
+    delete_file,
+    # find_duplicate
+)
+from db_service import (
+    get_or_create_user,
+    file_exists_for_user,
+    save_file_metadata,
+    get_file_for_user,
+    delete_file_metadata
+)
+
+load_dotenv(override=True)
 
 app = Flask(__name__)
 
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+
+oauth = OAuth(app)
+
+# app.config["SESSION_COOKIE_NAME"] = "clouddrop_session"
+# app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# app.config["SESSION_COOKIE_SECURE"] = False
+
+
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
+COGNITO_CLIENT_SECRET = os.getenv("COGNITO_CLIENT_SECRET")
+COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN")
+
+COGNITO_ISSUER = (
+    f"https://cognito-idp.us-east-1.amazonaws.com/"
+    f"{COGNITO_USER_POOL_ID}"
+)
+
+oauth.register(
+    name="cognito",
+    client_id=COGNITO_CLIENT_ID,
+    client_secret=COGNITO_CLIENT_SECRET,
+    server_metadata_url=(
+        f"{COGNITO_ISSUER}/.well-known/openid-configuration"
+    ),
+    client_kwargs={
+        "scope": "openid email profile"
+    }
+)
 
 HTML = """
 <!DOCTYPE html>
@@ -65,9 +115,9 @@ HTML = """
         }
 
         .container {
-            width: 86%;
-            max-width: 1100px;
-            margin: 45px auto;
+            width: 90%;
+            max-width: 1200px;
+            margin: 0 auto;
         }
 
         .hero {
@@ -178,14 +228,22 @@ HTML = """
             background: #273149;
         }
 
-        .message {
-            margin-top: 15px;
-            padding: 12px;
-            background: #ecfdf3;
-            color: #15803d;
-            border-radius: 10px;
-            font-size: 14px;
-        }
+       .message {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 20px;
+    padding: 18px 24px;
+    background: #ecfdf3;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.5;
+    min-height: 55px;
+    display: flex;
+    align-items: center;
+}
 
         .side-card h3 {
             margin-bottom: 22px;
@@ -343,7 +401,135 @@ HTML = """
             }
         }
 
-    </style>
+        .share-btn {
+                text-decoration: none;
+                padding: 8px 14px;
+                border-radius: 8px;
+                background: #eef2ff;
+                color: #4f46e5;
+                font-size: 13px;
+                font-weight: 600;
+                border: 1px solid #c7d2fe;
+            }
+
+        .share-btn:hover {
+                background: #e0e7ff;
+            }
+            
+        .share-box {
+    margin: 20px 0;
+    padding: 20px;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+
+.share-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.share-box input {
+    width: 70%;
+    padding: 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+
+.share-box button {
+    padding: 10px 16px;
+    margin-left: 8px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.share-expiry {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #64748b;
+}
+
+.analytics-section {
+    margin-top: 30px;
+    width: 100%;
+}
+
+.analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(250px, 1fr));
+    gap: 18px;
+    margin-top: 15px;
+}
+
+.analytics-card {
+    padding: 20px;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    min-width: 0;
+}
+
+.analytics-label {
+    color: #64748b;
+    font-size: 14px;
+}
+
+.analytics-value {
+    margin-top: 8px;
+    font-size: 26px;
+    font-weight: 700;
+}
+
+.analytics-content {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(350px, 1.3fr);
+    gap: 20px;
+    margin-top: 20px;
+    width: 100%;
+}
+
+.analytics-box {
+    padding: 20px;
+    border-radius: 14px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    min-width: 0;
+}
+
+.analytics-box h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+}
+
+.type-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 14px;
+}
+
+.type-row span:first-child {
+    overflow-wrap: anywhere;
+}
+
+.type-row span:last-child {
+    white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+
+    .analytics-grid,
+    .analytics-content {
+        grid-template-columns: 1fr;
+    }
+
+}    </style>
 </head>
 
 
@@ -451,6 +637,26 @@ HTML = """
 
             </div>
 
+            {% if share_url %}
+            <div class="share-box">
+                <div class="share-title">🔗 Secure Share Link</div>
+
+             <input
+             type="text"
+            id="shareLink"
+            value="{{ share_url }}"
+            readonly
+            >
+
+            <button onclick="copyShareLink()">
+                Copy Link
+            </button>
+
+            <div class="share-expiry">
+            ⏱ This link expires in 5 minutes.
+                </div>
+            </div>
+            {% endif %}
 
             <!-- STORAGE -->
 
@@ -483,6 +689,104 @@ HTML = """
 
 
                 <div class="connection">
+                
+                <div class="analytics-section">
+
+                    <div class="section-title">
+                        📊 Storage Analytics
+                    </div>
+
+                    <div class="analytics-grid">
+
+                    <div class="analytics-card">
+                        <div class="analytics-label">
+                            Total Files
+                        </div>
+
+                        <div class="analytics-value">
+                            {{ storage.file_count }}
+                        </div>
+                    </div>
+
+                    <div class="analytics-card">
+                        <div class="analytics-label">
+                            Storage Used
+                        </div>
+
+                        <div class="analytics-value">
+                            {{ "%.2f"|format(storage.total_size / 1024 / 1024) }} MB
+                        </div>
+                    </div>
+
+                </div>
+
+
+                <div class="analytics-content">
+
+                    <div class="analytics-box">
+
+                        <h3>File Types</h3>
+
+                        {% if storage.file_types %}
+
+                            {% for type, size in storage.file_types.items() %}
+
+                                <div class="type-row">
+
+                                    <span>
+                                        {{ type }}
+                                    </span>
+
+                                    <span>
+                                        {{ "%.2f"|format(size / 1024 / 1024) }} MB
+                                    </span>
+
+                                </div>
+
+                            {% endfor %}
+
+                        {% else %}
+
+                            <p>No files uploaded yet.</p>
+
+                        {% endif %}
+
+                    </div>
+
+
+                    <div class="analytics-box">
+
+                        <h3>Largest Files</h3>
+
+                        {% if storage.largest_files %}
+
+                            {% for file in storage.largest_files %}
+
+                                <div class="type-row">
+
+                                    <span>
+                                        {{ file.name }}
+                                    </span>
+
+                                    <span>
+                                        {{ "%.2f"|format(file.size / 1024 / 1024) }} MB
+                                    </span>
+
+                                </div>
+
+                            {% endfor %}
+
+                        {% else %}
+
+                            <p>No files uploaded yet.</p>
+
+                        {% endif %}
+
+                    </div>
+
+                </div>
+
+            </div>
 
                     <h3>
                         Cloud Connection
@@ -550,6 +854,30 @@ HTML = """
                 </span>
 
             </div>
+            
+            {% if session.get("user") %}
+<div style="
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+">
+    <span>
+        👤 {{ session["user"].get("email", "User") }}
+    </span>
+
+    <a
+        href="/logout"
+        style="
+            text-decoration: none;
+            color: #ef4444;
+            font-weight: 600;
+        "
+    >
+        Logout
+    </a>
+</div>
+{% endif %}
 
 
            {% if storage.files %}
@@ -576,38 +904,47 @@ HTML = """
                 {{ "%.2f"|format(file.size / 1024 / 1024) }} MB
             </span>
 
-            <a
-                href="/download/{{ file.name }}"
-                style="
-                    text-decoration: none;
-                    color: #5b67f1;
-                    font-weight: 600;
-                "
-            >
-                Download
-            </a>
+<a
+    href="/download/{{ file.s3_key }}"
+    style="
+        text-decoration: none;
+        color: #5b67f1;
+        font-weight: 600;
+    "
+>
+    Download
+</a>
 
-            <form
-                action="/delete/{{ file.name }}"
-                method="POST"
-                style="display: inline;"
-                onsubmit="return confirm('Delete this file?');"
-            >
+<a
+    href="/share/{{ file.s3_key }}"
+    style="
+        text-decoration: none;
+        color: #10b981;
+        font-weight: 600;
+        margin-left: 15px;
+    "
+>
+    Share
+</a>
 
-                <button
-                    type="submit"
-                    style="
-                        border: none;
-                        background: none;
-                        color: #ef4444;
-                        cursor: pointer;
-                        font-weight: 600;
-                    "
-                >
-                    Delete
-                </button>
-
-            </form>
+<form
+    action="/delete/{{ file.s3_key }}" method="POST"
+    style="display: inline; margin-left: 15px;"
+    onsubmit="return confirm('Delete this file?');"
+>
+    <button
+        type="submit"
+        style="
+            border: none;
+            background: none;
+            color: #ef4444;
+            cursor: pointer;
+            font-weight: 600;
+        "
+    >
+        Delete
+    </button>
+</form>
 
         </div>
 
@@ -695,95 +1032,348 @@ HTML = """
 
 
     </main>
+    
+    <script>
+function copyShareLink() {
+    const link = document.getElementById("shareLink");
+
+    navigator.clipboard.writeText(link.value);
+
+    alert("Secure share link copied!");
+}
+</script>
 
 </body>
 
 </html>
 """
 
+@app.route("/login")
+def login():
+    redirect_uri = "http://localhost:5000/callback"
+    return oauth.cognito.authorize_redirect(redirect_uri)
+
+    
+@app.route("/callback")
+def callback():
+
+    token = oauth.cognito.authorize_access_token()
+
+    user = token.get("userinfo")
+
+    if not user:
+        return "Authentication failed.", 401
+
+    cognito_sub = user.get("sub")
+    email = user.get("email")
+
+    user_id = get_or_create_user(
+        cognito_sub,
+        email
+    )
+
+    session["user"] = user
+    session["user_id"] = user_id
+
+    return redirect(url_for("index"))
 
 @app.route("/")
-def home():
+def index():
 
-    storage = get_storage_info()
+    if "user" not in session:
+        return redirect(url_for("login"))
+
+    cognito_sub = session["user"]["sub"]
+
+    user_prefix = f"users/{cognito_sub}/"
+
+    storage = get_storage_info(user_prefix)
 
     return render_template_string(
         HTML,
         message=None,
         uploaded_file=None,
-        storage=storage
+        storage=storage,
+        share_url=None
     )
 
+@app.route("/logout")
+def logout():
+
+    session.clear()
+
+    logout_params = urlencode({
+        "client_id": COGNITO_CLIENT_ID,
+        "logout_uri": "http://localhost:5000/"
+    })
+
+    logout_url = (
+        f"{COGNITO_DOMAIN}/logout?"
+        f"{logout_params}"
+    )
+
+    return redirect(logout_url)
 
 @app.route("/upload", methods=["POST"])
 def upload():
 
+    # Make sure user is logged in
+    if "user" not in session:
+        return redirect(url_for("login"))
+
     file = request.files.get("file")
 
-    if not file:
+    cognito_sub = session["user"]["sub"]
+    user_id = session["user_id"]
 
-        storage = get_storage_info()
+    user_prefix = f"users/{cognito_sub}/"
+
+    if not file:
+        storage = get_storage_info(user_prefix)
 
         return render_template_string(
             HTML,
             message="Please select a file.",
             uploaded_file=None,
-            storage=storage
+            storage=storage,
+            share_url=None
         )
 
     try:
 
-        message = upload_file(
-            file,
-            file.filename
+        # ------------------------------------------------
+        # STEP 1: Read file into memory
+        # ------------------------------------------------
+
+        file_data = file.read()
+
+        file_size = len(file_data)
+
+        # ------------------------------------------------
+        # STEP 2: Calculate SHA-256 hash
+        # ------------------------------------------------
+
+        file_hash = hashlib.sha256(
+            file_data
+        ).hexdigest()
+        
+        print("UPLOADED FILE HASH:", file_hash)
+        # ------------------------------------------------
+        # STEP 3: Check duplicate in RDS
+        # ------------------------------------------------
+
+        existing_file = file_exists_for_user(
+            user_id,
+            file_hash
+        )
+        
+        print("USER ID:", user_id)
+        print("HASH:", file_hash)
+        print("EXISTING FILE:", existing_file)
+
+        if existing_file:
+
+            print("DUPLICATE DETECTED - STOPPING UPLOAD")
+            storage = get_storage_info(
+                user_prefix
+            )
+
+            return render_template_string(
+                HTML,
+                message=(
+                    f"Duplicate file detected! "
+                    f"This file already exists as "
+                    f"'{existing_file['filename']}'."
+                ),
+                uploaded_file=None,
+                storage=storage,
+                share_url=None
+            )
+
+        # ------------------------------------------------
+        # STEP 4: Create user-specific S3 key
+        # ------------------------------------------------
+
+        filename = file.filename
+
+        s3_key = (
+            f"users/{cognito_sub}/{filename}"
         )
 
-        storage = get_storage_info()
+        # ------------------------------------------------
+        # STEP 5: Upload file to S3
+        # ------------------------------------------------
+
+        from io import BytesIO
+
+        file_stream = BytesIO(file_data)
+
+        message = upload_file(
+            file_stream,
+            s3_key
+        )
+
+        # ------------------------------------------------
+        # STEP 6: Determine file type
+        # ------------------------------------------------
+
+        if "." in filename:
+            file_type = filename.rsplit(
+                ".",
+                1
+            )[1].lower()
+        else:
+            file_type = "unknown"
+
+        # ------------------------------------------------
+        # STEP 7: Save metadata in RDS
+        # ------------------------------------------------
+
+        save_file_metadata(
+            user_id=user_id,
+            filename=filename,
+            s3_key=s3_key,
+            file_hash=file_hash,
+            file_size=file_size,
+            file_type=file_type
+        )
+
+        # ------------------------------------------------
+        # STEP 8: Refresh user's storage
+        # ------------------------------------------------
+
+        storage = get_storage_info(
+            user_prefix
+        )
 
         return render_template_string(
             HTML,
-            message=message,
-            uploaded_file=file.filename,
-            storage=storage
+            message=(
+                f"File uploaded successfully: "
+                f"{filename}"
+            ),
+            uploaded_file=filename,
+            storage=storage,
+            share_url=None
         )
 
     except Exception as e:
+
+        print(
+            "UPLOAD ERROR:",
+            str(e)
+        )
+
+        storage = get_storage_info(
+            user_prefix
+        )
 
         return render_template_string(
             HTML,
             message=f"Upload failed: {str(e)}",
             uploaded_file=None,
-            storage={
-                "total_size": 0,
-                "file_count": 0,
-                "files": []
-            }
+            storage=storage,
+            share_url=None
         )
-
+                
 @app.route("/download/<path:filename>")
 def download(filename):
 
+    if "user" not in session:
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+
+    file_record = get_file_for_user(
+        user_id,
+        filename
+    )
+
+    if not file_record:
+        return "Access denied.", 403
+
     try:
-        url = download_file(filename)
+
+        url = download_file(
+            file_record["s3_key"]
+        )
 
         return redirect(url)
 
     except Exception as e:
+
         return f"Download failed: {str(e)}"
+
+@app.route("/share/<path:filename>")
+def share(filename):
+
+    if "user" not in session:
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+
+    file_record = get_file_for_user(
+        user_id,
+        filename
+    )
+
+    if not file_record:
+        return "Access denied.", 403
+
+    try:
+
+        url = download_file(
+            file_record["s3_key"]
+        )
+
+        storage = get_storage_info(
+            f"users/{session['user']['sub']}/"
+        )
+
+        return render_template_string(
+            HTML,
+            message="Secure share link generated!",
+            uploaded_file=None,
+            storage=storage,
+            share_url=url
+        )
+
+    except Exception as e:
+
+        return f"Share failed: {str(e)}"
 
 @app.route("/delete/<path:filename>", methods=["POST"])
 def delete(filename):
 
-    try:
-        message = delete_file(filename)
+    if "user" not in session:
+        return redirect(url_for("login"))
 
-        return redirect("/")
+    user_id = session["user_id"]
+
+    file_record = get_file_for_user(
+        user_id,
+        filename
+    )
+
+    if not file_record:
+        return "Access denied.", 403
+
+    try:
+
+        delete_file(
+            file_record["s3_key"]
+        )
+        delete_file_metadata(
+        user_id,
+        file_record["s3_key"]
+)
+        return redirect(url_for("index"))
 
     except Exception as e:
+
         return f"Delete failed: {str(e)}"
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=5000,

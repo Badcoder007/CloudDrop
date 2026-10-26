@@ -16,56 +16,96 @@ s3 = boto3.client(
 )
 
 
-def upload_file(file, filename):
+def upload_file(file, s3_key):
     s3.upload_fileobj(
         file,
         S3_BUCKET,
-        filename
+        s3_key
     )
 
-    return f"File uploaded successfully: {filename}"
+    return f"File uploaded successfully: {s3_key}"
 
 
-def get_storage_info():
+def get_storage_info(prefix=None):
+
     total_size = 0
     file_count = 0
     files = []
+    file_types = {}
 
-    response = s3.list_objects_v2(
-        Bucket=S3_BUCKET
-    )
+    list_params = {
+        "Bucket": S3_BUCKET
+    }
+
+    # Only show files belonging to this user
+    if prefix:
+        list_params["Prefix"] = prefix
+
+    response = s3.list_objects_v2(**list_params)
 
     for obj in response.get("Contents", []):
 
-        total_size += obj["Size"]
+        s3_key = obj["Key"]
+        size = obj["Size"]
+
+        # Don't treat folder markers as files
+        if s3_key.endswith("/"):
+            continue
+
+        # Display only the filename, not the complete S3 path
+        filename = s3_key.split("/")[-1]
+
+        total_size += size
         file_count += 1
 
+        if "." in filename:
+            extension = "." + filename.rsplit(".", 1)[1].lower()
+        else:
+            extension = "Other"
+
+        file_types[extension] = (
+            file_types.get(extension, 0) + size
+        )
+
         files.append({
-            "name": obj["Key"],
-            "size": obj["Size"]
+            "name": filename,
+            "s3_key": s3_key,
+            "size": size,
+            "type": extension
         })
+
+    largest_files = sorted(
+        files,
+        key=lambda x: x["size"],
+        reverse=True
+    )[:5]
 
     return {
         "total_size": total_size,
         "file_count": file_count,
-        "files": files
+        "files": files,
+        "file_types": file_types,
+        "largest_files": largest_files
     }
-    
-def download_file(filename):
+
+
+def download_file(s3_key):
+
     return s3.generate_presigned_url(
-        "get_object",
+        ClientMethod="get_object",
         Params={
             "Bucket": S3_BUCKET,
-            "Key": filename
+            "Key": s3_key
         },
         ExpiresIn=300
     )
 
 
-def delete_file(filename):
+def delete_file(s3_key):
+
     s3.delete_object(
         Bucket=S3_BUCKET,
-        Key=filename
+        Key=s3_key
     )
 
-    return f"File deleted successfully: {filename}"
+    return f"File deleted successfully: {s3_key}"
